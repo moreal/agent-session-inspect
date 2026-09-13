@@ -35,3 +35,10 @@ New tools join without touching the TUI:
   address or explicitly rebut each finding.
 - 토큰 효율적이게 동작하십시오. Prefer small diffs, shared helpers over new
   abstractions, truncated display strings, and no duplicated context.
+
+## Commits
+
+- Commit unsigned: `git commit --no-gpg-sign`. The sandbox cannot reach the
+  SSH signing-agent socket, so signing fails there.
+- Never change signing config to work around this. The user re-signs
+  separately (`git commit --amend -S`).
