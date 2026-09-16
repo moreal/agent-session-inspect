@@ -11,7 +11,7 @@ outside the sandbox when the default registry path is not writable.
 - `cargo test` — run the suite; keep provider fixtures hermetic under `src/`
 - `cargo clippy --all-targets` — must be warning-free before finishing
 - `cargo fmt --check` — must pass before finishing
-- Run with an optional sessions root: `cargo run -- <root>`
+- Run with optional sessions roots: `cargo run -- [<muse-root> [<claude-root>]]`
 
 ## Architecture
 
