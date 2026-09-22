@@ -11,7 +11,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use muse_session_inspect::core::{
+use agent_session_inspect::core::{
     Block as Content, Registry, Role, Session, SessionMeta, truncate,
 };
 
@@ -593,7 +593,7 @@ fn render(session: &Session) -> (Vec<Line<'static>>, Vec<u16>) {
 
 fn first_line(text: &str) -> String {
     let line = text.lines().next().unwrap_or_default();
-    muse_session_inspect::core::truncate(line, 160)
+    agent_session_inspect::core::truncate(line, 160)
 }
 
 #[cfg(test)]
@@ -602,7 +602,7 @@ mod tests {
         clamp_scroll, filter_indices, max_scroll, next_turn, prev_turn, render, tab_label,
         turn_visual_rows, visual_rows, wrapped_rows,
     };
-    use muse_session_inspect::core::{Block, Role, Session, SessionMeta, Turn};
+    use agent_session_inspect::core::{Block, Role, Session, SessionMeta, Turn};
     use ratatui::{
         buffer::Buffer,
         layout::Rect,

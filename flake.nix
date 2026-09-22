@@ -1,5 +1,5 @@
 {
-  description = "muse session inspect - TUI for reading coding-agent sessions";
+  description = "agent session inspect - TUI for reading coding-agent sessions";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -24,7 +24,7 @@
         };
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "muse-session-inspect";
+          pname = "agent-session-inspect";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;

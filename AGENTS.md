@@ -7,7 +7,7 @@ Coding-agent session inspector. Rust 2024 edition, TUI with ratatui, dev shell v
 Enter the dev shell with `nix develop` (or direnv via `.envrc`). Set `CARGO_HOME`
 outside the sandbox when the default registry path is not writable.
 
-- `cargo build` — build `muse-session-inspect`
+- `cargo build` — build `agent-session-inspect`
 - `cargo test` — run the suite; keep provider fixtures hermetic under `src/`
 - `cargo clippy --all-targets` — must be warning-free before finishing
 - `cargo fmt --check` — must pass before finishing

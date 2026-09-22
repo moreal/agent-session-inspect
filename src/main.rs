@@ -2,13 +2,13 @@ mod tui;
 
 use std::path::PathBuf;
 
+use agent_session_inspect::core::Registry;
+use agent_session_inspect::providers::claude::ClaudeProvider;
+use agent_session_inspect::providers::codex::CodexProvider;
+use agent_session_inspect::providers::muse::MuseProvider;
+use agent_session_inspect::providers::opencode::OpenCodeProvider;
+use agent_session_inspect::providers::pi::PiProvider;
 use anyhow::Result;
-use muse_session_inspect::core::Registry;
-use muse_session_inspect::providers::claude::ClaudeProvider;
-use muse_session_inspect::providers::codex::CodexProvider;
-use muse_session_inspect::providers::muse::MuseProvider;
-use muse_session_inspect::providers::opencode::OpenCodeProvider;
-use muse_session_inspect::providers::pi::PiProvider;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);

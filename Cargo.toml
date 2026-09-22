@@ -1,10 +1,10 @@
 [package]
-name = "muse-session-inspect"
+name = "agent-session-inspect"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "muse-session-inspect"
+name = "agent-session-inspect"
 path = "src/main.rs"
 
 [dependencies]

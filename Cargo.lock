@@ -3,6 +3,21 @@
 version = 4
 
 [[package]]
+name = "agent-session-inspect"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "ratatui",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "unicode-width 0.2.0",
+ "walkdir",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -325,21 +340,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "muse-session-inspect"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "ratatui",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "unicode-width 0.2.0",
- "walkdir",
 ]
 
 [[package]]
