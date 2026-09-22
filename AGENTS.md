@@ -38,7 +38,6 @@ New tools join without touching the TUI:
 
 ## Commits
 
-- Commit unsigned: `git commit --no-gpg-sign`. The sandbox cannot reach the
-  SSH signing-agent socket, so signing fails there.
-- Never change signing config to work around this. The user re-signs
-  separately (`git commit --amend -S`).
+- Sign commits directly; signing is expected to work. If signing fails,
+  fall back to `git commit --no-gpg-sign` and report the failure.
+- Never change signing config to work around a failure.
