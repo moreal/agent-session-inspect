@@ -1,3 +1,6 @@
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
+
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
@@ -8,20 +11,31 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthChar;
 
-use muse_session_inspect::core::{Block as Content, Role, Session, SessionMeta};
+use muse_session_inspect::core::{
+    Block as Content, Registry, Role, Session, SessionMeta, truncate,
+};
 
-pub fn run(
-    sessions: Vec<SessionMeta>,
-    open: impl Fn(&SessionMeta) -> Result<Session>,
-) -> Result<()> {
+struct Batch {
+    tool: &'static str,
+    sessions: Result<Vec<SessionMeta>, String>,
+}
+
+pub fn run(registry: Registry) -> Result<()> {
     let mut terminal = ratatui::init();
-    let outcome = App::new(sessions).run(&mut terminal, &open);
+    let outcome = App::new(registry).run(&mut terminal);
     ratatui::restore();
     outcome
 }
 
 struct App {
+    registry: Arc<Registry>,
+    receiver: mpsc::Receiver<Batch>,
     sessions: Vec<SessionMeta>,
+    shown: Vec<usize>,
+    tools: Vec<&'static str>,
+    tab: usize,
+    pending: usize,
+    load_errors: Vec<String>,
     list: ListState,
     list_height: u16,
     view: Option<View>,
@@ -38,27 +52,44 @@ struct View {
 }
 
 impl App {
-    fn new(sessions: Vec<SessionMeta>) -> Self {
-        let mut list = ListState::default();
-        if !sessions.is_empty() {
-            list.select(Some(0));
+    fn new(registry: Registry) -> Self {
+        let tools = registry.tool_ids();
+        let registry = Arc::new(registry);
+        let (sender, receiver) = mpsc::channel();
+        let pending = tools.len();
+        for tool in tools.clone() {
+            let registry = Arc::clone(&registry);
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                let sessions = registry
+                    .sessions_for(tool)
+                    .map_err(|error| truncate(&error.to_string(), 160));
+                let _ = sender.send(Batch { tool, sessions });
+            });
         }
         Self {
-            sessions,
-            list,
+            registry,
+            receiver,
+            sessions: Vec::new(),
+            shown: Vec::new(),
+            tools,
+            tab: 0,
+            pending,
+            load_errors: Vec::new(),
+            list: ListState::default(),
             list_height: 0,
             view: None,
             error: None,
         }
     }
 
-    fn run(
-        &mut self,
-        terminal: &mut DefaultTerminal,
-        open: &dyn Fn(&SessionMeta) -> Result<Session>,
-    ) -> Result<()> {
+    fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         loop {
             terminal.draw(|frame| self.draw(frame))?;
+            self.drain();
+            if !event::poll(Duration::from_millis(120))? {
+                continue;
+            }
             let Event::Key(key) = event::read()? else {
                 continue;
             };
@@ -70,7 +101,17 @@ impl App {
                 (KeyCode::Char('c'), true) => return Ok(()),
                 (KeyCode::Char('q'), false) => return Ok(()),
                 (KeyCode::Esc, _) => self.view = None,
-                (KeyCode::Enter, _) => self.open_selected(open),
+                (KeyCode::Enter, _) => self.open_selected(),
+                (KeyCode::Tab, _) if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.next_tab();
+                }
+                (KeyCode::Tab, _) | (KeyCode::BackTab, _) => self.prev_tab(),
+                (KeyCode::Char(digit), false)
+                    if digit.is_ascii_digit()
+                        && (digit as usize - '0' as usize) <= self.tools.len() =>
+                {
+                    self.goto_tab(digit as usize - '0' as usize);
+                }
                 (KeyCode::Char('f'), true) => self.page(1, 1),
                 (KeyCode::Char('b'), true) => self.page(-1, 1),
                 (KeyCode::Char('d'), true) => self.page(1, 2),
@@ -108,16 +149,90 @@ impl App {
         self.move_selection(amount);
     }
 
+    fn drain(&mut self) {
+        let mut arrived = false;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(batch) => {
+                    self.pending = self.pending.saturating_sub(1);
+                    match batch.sessions {
+                        Ok(loaded) => {
+                            self.sessions.extend(loaded);
+                            self.sort_sessions();
+                            arrived = true;
+                        }
+                        Err(error) => {
+                            self.load_errors.push(format!("{}: {error}", batch.tool));
+                        }
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.pending = 0;
+                    break;
+                }
+            }
+        }
+        if arrived {
+            self.refilter();
+        }
+    }
+
+    fn sort_sessions(&mut self) {
+        let order = |tool| {
+            self.tools
+                .iter()
+                .position(|id| *id == tool)
+                .unwrap_or(usize::MAX)
+        };
+        self.sessions.sort_by_key(|meta| order(meta.tool));
+    }
+
+    fn refilter(&mut self) {
+        self.shown = filter_indices(&self.sessions, &self.tools, self.tab);
+        let len = self.shown.len();
+        if len == 0 {
+            self.list.select(None);
+            return;
+        }
+        let clamped = self.list.selected().unwrap_or(0).min(len - 1);
+        self.list.select(Some(clamped));
+    }
+
+    fn next_tab(&mut self) {
+        if self.view.is_some() {
+            return;
+        }
+        self.goto_tab((self.tab + 1) % (self.tools.len() + 1));
+    }
+
+    fn prev_tab(&mut self) {
+        if self.view.is_some() {
+            return;
+        }
+        self.goto_tab((self.tab + self.tools.len()) % (self.tools.len() + 1));
+    }
+
+    fn goto_tab(&mut self, tab: usize) {
+        if self.view.is_some() || tab > self.tools.len() {
+            return;
+        }
+        self.tab = tab;
+        self.list
+            .select(if self.shown.is_empty() { None } else { Some(0) });
+        self.refilter();
+    }
+
     fn edge(&mut self, top: bool) {
         if let Some(view) = &mut self.view {
             view.edge(top);
             return;
         }
-        if self.sessions.is_empty() {
+        if self.shown.is_empty() {
             return;
         }
         self.list
-            .select(Some(if top { 0 } else { self.sessions.len() - 1 }));
+            .select(Some(if top { 0 } else { self.shown.len() - 1 }));
     }
 
     fn turn(&mut self, direction: i16) {
@@ -132,7 +247,7 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.sessions.is_empty() {
+        if self.shown.is_empty() {
             return;
         }
         let next = self
@@ -140,22 +255,20 @@ impl App {
             .selected()
             .unwrap_or(0)
             .saturating_add_signed(delta)
-            .min(self.sessions.len() - 1);
+            .min(self.shown.len() - 1);
         self.list.select(Some(next));
     }
 
-    fn open_selected(&mut self, open: &dyn Fn(&SessionMeta) -> Result<Session>) {
-        if self.view.is_some() || self.sessions.is_empty() {
+    fn open_selected(&mut self) {
+        if self.view.is_some() || self.shown.is_empty() {
             return;
         }
-        let meta = &self.sessions[self.list.selected().unwrap_or(0)];
-        let session = match open(meta) {
+        let position = self.list.selected().unwrap_or(0).min(self.shown.len() - 1);
+        let meta = &self.sessions[self.shown[position]];
+        let session = match self.registry.load(meta) {
             Ok(session) => session,
             Err(error) => {
-                self.error = Some(muse_session_inspect::core::truncate(
-                    &error.to_string(),
-                    160,
-                ));
+                self.error = Some(truncate(&error.to_string(), 160));
                 return;
             }
         };
@@ -199,7 +312,8 @@ impl App {
             return;
         }
         self.list_height = height;
-        let items = self.sessions.iter().map(|meta| {
+        let items = self.shown.iter().map(|index| {
+            let meta = &self.sessions[*index];
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{} ", meta.title),
@@ -211,18 +325,68 @@ impl App {
                 ),
             ]))
         });
-        let title = match &self.error {
-            Some(error) => format!("sessions [!] {error}"),
-            None => "sessions [j/k] move [enter] open [q] quit".to_owned(),
-        };
         frame.render_stateful_widget(
             List::new(items)
-                .block(Block::bordered().title(title))
+                .block(Block::bordered().title(self.list_title()))
                 .highlight_style(Style::default().bg(Color::DarkGray)),
             frame.area(),
             &mut self.list,
         );
     }
+
+    fn list_title(&self) -> String {
+        let mut tabs = vec![tab_label("all", 0, self.tab)];
+        tabs.extend(
+            self.tools
+                .iter()
+                .enumerate()
+                .map(|(index, tool)| tab_label(tool, index + 1, self.tab)),
+        );
+        let mut status = if self.pending > 0 {
+            format!(
+                "loading {}/{}",
+                self.tools.len() - self.pending,
+                self.tools.len()
+            )
+        } else {
+            format!("{} sessions", self.shown.len())
+        };
+        let failure = self.load_errors.first().map(|error| {
+            if self.load_errors.len() > 1 {
+                format!("{error} (+{} more)", self.load_errors.len() - 1)
+            } else {
+                error.clone()
+            }
+        });
+        if let Some(error) = failure.or(self.error.clone()) {
+            status.push_str(&format!(" [!] {error}"));
+        }
+        format!(
+            "{} {status} [tab] tool [j/k] move [enter] open [q] quit",
+            tabs.join(" ")
+        )
+    }
+}
+
+fn tab_label(name: &str, index: usize, active: usize) -> String {
+    if index == active {
+        format!("[{name}]")
+    } else {
+        format!(" {name} ")
+    }
+}
+
+fn filter_indices(sessions: &[SessionMeta], tools: &[&str], tab: usize) -> Vec<usize> {
+    if tab == 0 || tab > tools.len() {
+        return (0..sessions.len()).collect();
+    }
+    let tool = tools[tab - 1];
+    sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, meta)| meta.tool == tool)
+        .map(|(index, _)| index)
+        .collect()
 }
 
 impl View {
@@ -435,8 +599,8 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_scroll, max_scroll, next_turn, prev_turn, render, turn_visual_rows, visual_rows,
-        wrapped_rows,
+        clamp_scroll, filter_indices, max_scroll, next_turn, prev_turn, render, tab_label,
+        turn_visual_rows, visual_rows, wrapped_rows,
     };
     use muse_session_inspect::core::{Block, Role, Session, SessionMeta, Turn};
     use ratatui::{
@@ -445,6 +609,38 @@ mod tests {
         text::Line,
         widgets::{Paragraph, Widget, Wrap},
     };
+
+    fn metas() -> Vec<SessionMeta> {
+        ["muse", "claude", "muse"]
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| SessionMeta {
+                id: format!("id{index}"),
+                tool,
+                title: format!("title{index}"),
+                workspace: String::new(),
+                model: String::new(),
+                turns: 0,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filter_tabs_select_all_or_one_tool() {
+        let sessions = metas();
+        let tools = ["muse", "claude"];
+        assert_eq!(filter_indices(&sessions, &tools, 0), vec![0, 1, 2]);
+        assert_eq!(filter_indices(&sessions, &tools, 1), vec![0, 2]);
+        assert_eq!(filter_indices(&sessions, &tools, 2), vec![1]);
+        assert_eq!(filter_indices(&sessions, &tools, 9), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn tab_label_marks_only_the_active_tab() {
+        assert_eq!(tab_label("all", 0, 0), "[all]");
+        assert_eq!(tab_label("muse", 1, 0), " muse ");
+        assert_eq!(tab_label("muse", 1, 1), "[muse]");
+    }
 
     fn fixture() -> Session {
         let turn = |role| Turn {

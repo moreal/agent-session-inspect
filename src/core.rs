@@ -37,7 +37,7 @@ pub struct Session {
     pub turns: Vec<Turn>,
 }
 
-pub trait Provider {
+pub trait Provider: Send + Sync {
     fn tool_id(&self) -> &'static str;
     fn sessions(&self) -> Result<Vec<SessionMeta>>;
     fn load(&self, id: &str) -> Result<Session>;
@@ -63,6 +63,32 @@ impl Registry {
         Self { providers }
     }
 
+    pub fn tool_ids(&self) -> Vec<&'static str> {
+        let mut ids = Vec::new();
+        for provider in &self.providers {
+            if !ids.contains(&provider.tool_id()) {
+                ids.push(provider.tool_id());
+            }
+        }
+        ids
+    }
+
+    pub fn sessions_for(&self, tool: &str) -> Result<Vec<SessionMeta>> {
+        let mut all = Vec::new();
+        let mut known = false;
+        for provider in &self.providers {
+            if provider.tool_id() == tool {
+                known = true;
+                all.extend(provider.sessions()?);
+            }
+        }
+        if known {
+            Ok(all)
+        } else {
+            Err(anyhow::anyhow!("no provider for tool {tool}"))
+        }
+    }
+
     pub fn sessions(&self) -> Result<Vec<SessionMeta>> {
         let mut all = Vec::new();
         for provider in &self.providers {
@@ -82,7 +108,55 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{Registry, SessionMeta, truncate};
+
+    struct Stub {
+        tool: &'static str,
+        ids: Vec<&'static str>,
+    }
+
+    impl super::Provider for Stub {
+        fn tool_id(&self) -> &'static str {
+            self.tool
+        }
+
+        fn sessions(&self) -> anyhow::Result<Vec<SessionMeta>> {
+            Ok(self
+                .ids
+                .iter()
+                .map(|id| SessionMeta {
+                    id: id.to_string(),
+                    tool: self.tool,
+                    title: id.to_string(),
+                    workspace: String::new(),
+                    model: String::new(),
+                    turns: 0,
+                })
+                .collect())
+        }
+
+        fn load(&self, id: &str) -> anyhow::Result<super::Session> {
+            anyhow::bail!("no session {id}")
+        }
+    }
+
+    #[test]
+    fn registry_routes_sessions_by_tool() {
+        let registry = Registry::new(vec![
+            Box::new(Stub {
+                tool: "a",
+                ids: vec!["a1"],
+            }),
+            Box::new(Stub {
+                tool: "b",
+                ids: vec!["b1", "b2"],
+            }),
+        ]);
+        assert_eq!(registry.tool_ids(), vec!["a", "b"]);
+        assert_eq!(registry.sessions_for("b").unwrap().len(), 2);
+        assert_eq!(registry.sessions().unwrap().len(), 3);
+        assert!(registry.sessions_for("missing").is_err());
+    }
 
     #[test]
     fn truncate_never_splits_a_char() {

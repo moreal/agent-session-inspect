@@ -39,6 +39,5 @@ fn main() -> Result<()> {
         Box::new(OpenCodeProvider::new(opencode_root)),
         Box::new(PiProvider::new(pi_root)),
     ]);
-    let sessions = registry.sessions()?;
-    tui::run(sessions, |meta| registry.load(meta))
+    tui::run(registry)
 }
